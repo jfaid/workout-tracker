@@ -1,143 +1,93 @@
-import Papa from 'papaparse'
 import type { WorkoutInsert } from './database.types'
 
-// Common Garmin Connect CSV column names
-// These may vary slightly based on export settings
-interface GarminRow {
-  'Activity Type'?: string
-  'Date'?: string
-  'Title'?: string
-  'Distance'?: string
-  'Calories'?: string
-  'Time'?: string
-  'Avg HR'?: string
-  'Max HR'?: string
-  'Avg Run Cadence'?: string
-  'Avg Pace'?: string
-  'Elev Gain'?: string
-  'Elev Loss'?: string
-  'Avg Power'?: string
-  'Max Power'?: string
-  // Alternative column names
-  'Activity_Type'?: string
-  'Avg_HR'?: string
-  'Max_HR'?: string
-  'Avg_Pace'?: string
-  'Avg_Power'?: string
-  'Max_Power'?: string
-  'Avg_Run_Cadence'?: string
-  'Elev_Gain'?: string
-}
-
-function parseDistance(value: string | undefined): number | null {
-  if (!value) return null
-  // Remove units like "km", "mi", commas
-  const num = parseFloat(value.replace(/[^\d.-]/g, ''))
-  return isNaN(num) ? null : num
-}
-
-function parseNumber(value: string | undefined): number | null {
-  if (!value) return null
-  const num = parseFloat(value.replace(/[^\d.-]/g, ''))
-  return isNaN(num) ? null : Math.round(num)
-}
-
-function parseDuration(value: string | undefined): number | null {
-  if (!value) return null
+export function parseGarminCSV(csvText: string): WorkoutInsert[] {
+  const lines = csvText.trim().split('\n')
+  if (lines.length < 2) return []
   
-  // Handle HH:MM:SS or MM:SS format
-  const parts = value.split(':').map(p => parseInt(p, 10))
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/['"]/g, ''))
+  const workouts: WorkoutInsert[] = []
   
-  if (parts.length === 3) {
-    // HH:MM:SS
-    return parts[0] * 3600 + parts[1] * 60 + parts[2]
-  } else if (parts.length === 2) {
-    // MM:SS
-    return parts[0] * 60 + parts[1]
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',').map(v => v.trim().replace(/['"]/g, ''))
+    const row: Record<string, string> = {}
+    
+    headers.forEach((header, index) => {
+      row[header] = values[index] || ''
+    })
+    
+    const workout: WorkoutInsert = {
+      activity_type: row['activity type'] || row['activity_type'] || row['type'] || 'Unknown',
+      date: parseDate(row['date'] || row['start time'] || row['start_time'] || ''),
+      duration_seconds: parseDuration(row['time'] || row['duration'] || row['elapsed time'] || ''),
+      distance_km: parseDistance(row['distance'] || ''),
+      avg_pace_per_km: row['avg pace'] || row['avg_pace'] || row['pace'] || null,
+      avg_heart_rate: parseNumber(row['avg hr'] || row['avg_hr'] || row['avg heart rate'] || ''),
+      max_heart_rate: parseNumber(row['max hr'] || row['max_hr'] || row['max heart rate'] || ''),
+      avg_power: parseNumber(row['avg power'] || row['avg_power'] || row['power'] || ''),
+      max_power: parseNumber(row['max power'] || row['max_power'] || ''),
+      avg_cadence: parseNumber(row['avg cadence'] || row['avg_cadence'] || row['cadence'] || ''),
+      elevation_gain: parseNumber(row['elev gain'] || row['elevation gain'] || row['total ascent'] || ''),
+      calories: parseNumber(row['calories'] || ''),
+    }
+    
+    if (workout.date) {
+      workouts.push(workout)
+    }
   }
   
+  return workouts
+}
+
+function parseDate(dateStr: string): string {
+  if (!dateStr) return ''
+  try {
+    const date = new Date(dateStr)
+    if (isNaN(date.getTime())) return dateStr
+    return date.toISOString().split('T')[0]
+  } catch {
+    return dateStr
+  }
+}
+
+function parseDuration(timeStr: string): number | null {
+  if (!timeStr) return null
+  const parts = timeStr.split(':').map(Number)
+  if (parts.length === 3) {
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]
+  } else if (parts.length === 2) {
+    return parts[0] * 60 + parts[1]
+  }
   return null
 }
 
-function parseDate(value: string | undefined): string | null {
-  if (!value) return null
-  
-  // Try to parse various date formats
-  const date = new Date(value)
-  if (isNaN(date.getTime())) return null
-  
-  return date.toISOString()
+function parseDistance(distStr: string): number | null {
+  if (!distStr) return null
+  const num = parseFloat(distStr.replace(/[^\d.]/g, ''))
+  return isNaN(num) ? null : num
 }
 
-function parsePace(value: string | undefined): string | null {
-  if (!value) return null
-  // Return as-is if it looks like a pace (e.g., "5:30")
-  if (value.includes(':')) return value.trim()
-  return value.trim() || null
+function parseNumber(str: string): number | null {
+  if (!str) return null
+  const num = parseFloat(str.replace(/[^\d.]/g, ''))
+  return isNaN(num) ? null : num
 }
 
-export function parseGarminCSV(file: File): Promise<WorkoutInsert[]> {
-  return new Promise((resolve, reject) => {
-    Papa.parse<GarminRow>(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const workouts: WorkoutInsert[] = results.data
-          .map((row): WorkoutInsert | null => {
-            // Get values with fallback for alternative column names
-            const activityType = row['Activity Type'] || row['Activity_Type']
-            const date = row['Date']
-            
-            // Skip rows without essential data
-            if (!activityType && !date) return null
-            
-            return {
-              activity_type: activityType || 'Unknown',
-              date: parseDate(date) || new Date().toISOString(),
-              duration_seconds: parseDuration(row['Time']),
-              distance_km: parseDistance(row['Distance']),
-              avg_pace_per_km: parsePace(row['Avg Pace'] || row['Avg_Pace']),
-              avg_heart_rate: parseNumber(row['Avg HR'] || row['Avg_HR']),
-              max_heart_rate: parseNumber(row['Max HR'] || row['Max_HR']),
-              avg_power: parseNumber(row['Avg Power'] || row['Avg_Power']),
-              max_power: parseNumber(row['Max Power'] || row['Max_Power']),
-              avg_cadence: parseNumber(row['Avg Run Cadence'] || row['Avg_Run_Cadence']),
-              elevation_gain: parseNumber(row['Elev Gain'] || row['Elev_Gain']),
-              calories: parseNumber(row['Calories']),
-              notes: null,
-            }
-          })
-          .filter((w): w is WorkoutInsert => w !== null)
-        
-        resolve(workouts)
-      },
-      error: (error) => {
-        reject(error)
-      },
-    })
-  })
-}
-
-// Format seconds as HH:MM:SS or MM:SS
-export function formatDuration(seconds: number | null): string {
-  if (seconds === null) return '-'
-  
-  const hrs = Math.floor(seconds / 3600)
-  const mins = Math.floor((seconds % 3600) / 60)
-  const secs = seconds % 60
-  
-  if (hrs > 0) {
-    return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+export function formatDuration(seconds: number): string {
+  if (!seconds) return '--:--'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = seconds % 60
+  if (h > 0) {
+    return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
   }
-  return `${mins}:${secs.toString().padStart(2, '0')}`
+  return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-// Format date for display
-export function formatDate(dateStr: string): string {
-  const date = new Date(dateStr)
-  return date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  })
+export function formatDate(dateStr: string | null): string {
+  if (!dateStr) return '-'
+  try {
+    return new Date(dateStr).toLocaleDateString()
+  } catch {
+    return dateStr
+  }
 }

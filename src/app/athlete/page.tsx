@@ -3,149 +3,130 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import { parseGarminCSV, formatDuration, formatDate } from '@/lib/garmin-parser'
-import type { Workout, WorkoutInsert, WorkoutPlan } from '@/lib/database.types'
+import type { Workout, WorkoutPlan } from '@/lib/database.types'
 
 export default function AthletePage() {
+  const [activeTab, setActiveTab] = useState<'workouts' | 'plans' | 'upload'>('workouts')
   const [workouts, setWorkouts] = useState<Workout[]>([])
   const [plans, setPlans] = useState<WorkoutPlan[]>([])
+  const [loading, setLoading] = useState(true)
+  const [file, setFile] = useState<File | null>(null)
+  const [preview, setPreview] = useState<any[]>([])
   const [uploading, setUploading] = useState(false)
-  const [preview, setPreview] = useState<WorkoutInsert[]>([])
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-  const [activeTab, setActiveTab] = useState<'workouts' | 'plans' | 'upload'>('workouts')
 
   useEffect(() => {
-    loadWorkouts()
-    loadPlans()
+    fetchWorkouts()
+    fetchPlans()
   }, [])
 
-  async function loadWorkouts() {
+  async function fetchWorkouts() {
     const { data, error } = await supabase
       .from('workouts')
       .select('*')
       .order('date', { ascending: false })
       .limit(50)
-
-    if (error) {
-      console.error('Error loading workouts:', error)
-      return
-    }
-    setWorkouts(data || [])
+    
+    if (data) setWorkouts(data)
+    setLoading(false)
   }
 
-  async function loadPlans() {
-    const { data, error } = await supabase
+  async function fetchPlans() {
+    const { data } = await supabase
       .from('workout_plans')
       .select('*')
-      .gte('scheduled_date', new Date().toISOString().split('T')[0])
       .order('scheduled_date', { ascending: true })
-
-    if (error) {
-      console.error('Error loading plans:', error)
-      return
-    }
-    setPlans(data || [])
+    
+    if (data) setPlans(data)
   }
 
-  async function handleFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    try {
-      const parsed = await parseGarminCSV(file)
-      setPreview(parsed)
-      setMessage({ type: 'success', text: `Parsed ${parsed.length} workouts from CSV` })
-    } catch (error) {
-      setMessage({ type: 'error', text: 'Failed to parse CSV file' })
-      console.error(error)
-    }
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFile = e.target.files?.[0]
+    if (!selectedFile) return
+    
+    setFile(selectedFile)
+    
+    const text = await selectedFile.text()
+    const parsed = parseGarminCSV(text)
+    setPreview(parsed)
   }
 
   async function handleUpload() {
     if (preview.length === 0) return
-
+    
     setUploading(true)
-    setMessage(null)
-
+    
     const { error } = await supabase
       .from('workouts')
-      .insert(preview)
-
-    setUploading(false)
-
+      .insert(preview as any)
+    
     if (error) {
-      setMessage({ type: 'error', text: `Upload failed: ${error.message}` })
-      console.error(error)
-      return
+      alert('Error uploading: ' + error.message)
+    } else {
+      alert(`Successfully uploaded ${preview.length} workouts!`)
+      setFile(null)
+      setPreview([])
+      fetchWorkouts()
     }
-
-    setMessage({ type: 'success', text: `Successfully uploaded ${preview.length} workouts!` })
-    setPreview([])
-    loadWorkouts()
+    
+    setUploading(false)
   }
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold mb-6">Athlete Dashboard</h1>
-
-      {/* Tabs */}
-      <div className="flex gap-1 mb-6 border-b">
+    <div className="max-w-6xl mx-auto p-6">
+      <h1 className="text-3xl font-bold mb-6">Athlete Dashboard</h1>
+      
+      <div className="flex gap-4 mb-6">
         <button
           onClick={() => setActiveTab('workouts')}
-          className={`px-4 py-2 -mb-px ${activeTab === 'workouts' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+          className={`px-4 py-2 rounded ${activeTab === 'workouts' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
         >
           My Workouts
         </button>
         <button
           onClick={() => setActiveTab('plans')}
-          className={`px-4 py-2 -mb-px ${activeTab === 'plans' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+          className={`px-4 py-2 rounded ${activeTab === 'plans' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
         >
           Training Plans
         </button>
         <button
           onClick={() => setActiveTab('upload')}
-          className={`px-4 py-2 -mb-px ${activeTab === 'upload' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-600'}`}
+          className={`px-4 py-2 rounded ${activeTab === 'upload' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}
         >
           Upload CSV
         </button>
       </div>
 
-      {/* Message */}
-      {message && (
-        <div className={`mb-4 p-3 rounded ${message.type === 'success' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-          {message.text}
-        </div>
-      )}
-
-      {/* Workouts Tab */}
       {activeTab === 'workouts' && (
         <div>
-          <h2 className="text-lg font-semibold mb-4">Recent Workouts</h2>
-          {workouts.length === 0 ? (
-            <p className="text-gray-500">No workouts yet. Upload a Garmin CSV to get started.</p>
+          <h2 className="text-xl font-semibold mb-4">Recent Workouts</h2>
+          {loading ? (
+            <p>Loading...</p>
+          ) : workouts.length === 0 ? (
+            <p className="text-gray-500">No workouts yet. Upload a Garmin CSV to get started!</p>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-100">
-                  <tr>
-                    <th className="px-3 py-2 text-left">Date</th>
-                    <th className="px-3 py-2 text-left">Type</th>
-                    <th className="px-3 py-2 text-right">Distance</th>
-                    <th className="px-3 py-2 text-right">Duration</th>
-                    <th className="px-3 py-2 text-right">Pace</th>
-                    <th className="px-3 py-2 text-right">Avg HR</th>
-                    <th className="px-3 py-2 text-right">Avg Power</th>
+              <table className="w-full border-collapse border">
+                <thead>
+                  <tr className="bg-gray-100">
+                    <th className="border p-2 text-left">Date</th>
+                    <th className="border p-2 text-left">Type</th>
+                    <th className="border p-2 text-left">Distance</th>
+                    <th className="border p-2 text-left">Duration</th>
+                    <th className="border p-2 text-left">Pace</th>
+                    <th className="border p-2 text-left">Avg HR</th>
+                    <th className="border p-2 text-left">Avg Power</th>
                   </tr>
                 </thead>
                 <tbody>
                   {workouts.map((w) => (
-                    <tr key={w.id} className="border-b hover:bg-gray-50">
-                      <td className="px-3 py-2">{formatDate(w.date)}</td>
-                      <td className="px-3 py-2">{w.activity_type}</td>
-                      <td className="px-3 py-2 text-right">{w.distance_km?.toFixed(2) ?? '-'} km</td>
-                      <td className="px-3 py-2 text-right">{formatDuration(w.duration_seconds)}</td>
-                      <td className="px-3 py-2 text-right">{w.avg_pace_per_km ?? '-'}</td>
-                      <td className="px-3 py-2 text-right">{w.avg_heart_rate ?? '-'} bpm</td>
-                      <td className="px-3 py-2 text-right">{w.avg_power ?? '-'} W</td>
+                    <tr key={w.id}>
+                      <td className="border p-2">{formatDate(w.date)}</td>
+                      <td className="border p-2">{w.activity_type}</td>
+                      <td className="border p-2">{w.distance_km?.toFixed(2)} km</td>
+                      <td className="border p-2">{formatDuration(w.duration_seconds || 0)}</td>
+                      <td className="border p-2">{w.avg_pace_per_km || '-'}</td>
+                      <td className="border p-2">{w.avg_heart_rate || '-'}</td>
+                      <td className="border p-2">{w.avg_power || '-'}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -155,28 +136,31 @@ export default function AthletePage() {
         </div>
       )}
 
-      {/* Plans Tab */}
       {activeTab === 'plans' && (
         <div>
-          <h2 className="text-lg font-semibold mb-4">Upcoming Training Plans</h2>
+          <h2 className="text-xl font-semibold mb-4">Training Plans</h2>
           {plans.length === 0 ? (
-            <p className="text-gray-500">No upcoming plans assigned yet.</p>
+            <p className="text-gray-500">No training plans assigned yet.</p>
           ) : (
             <div className="space-y-4">
               {plans.map((plan) => (
-                <div key={plan.id} className="border rounded-lg p-4 bg-white">
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-semibold">{plan.title}</h3>
-                    <span className="text-sm text-gray-500">{formatDate(plan.scheduled_date)}</span>
+                <div key={plan.id} className="border rounded p-4">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h3 className="font-semibold">{plan.title}</h3>
+                      <p className="text-sm text-gray-500">{formatDate(plan.scheduled_date)}</p>
+                    </div>
+                    <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded text-sm">
+                      {plan.workout_type}
+                    </span>
                   </div>
-                  {plan.description && <p className="text-gray-700 mb-2">{plan.description}</p>}
-                  <div className="flex gap-4 text-sm text-gray-600">
-                    {plan.workout_type && <span>Type: {plan.workout_type}</span>}
-                    {plan.target_distance_km && <span>Distance: {plan.target_distance_km} km</span>}
-                    {plan.target_pace && <span>Target Pace: {plan.target_pace}</span>}
+                  {plan.description && <p className="mt-2">{plan.description}</p>}
+                  <div className="mt-2 text-sm text-gray-600">
+                    {plan.target_distance_km && <span>Distance: {plan.target_distance_km}km • </span>}
+                    {plan.target_pace && <span>Pace: {plan.target_pace} • </span>}
                     {plan.target_hr_zone && <span>HR Zone: {plan.target_hr_zone}</span>}
                   </div>
-                  {plan.notes && <p className="mt-2 text-sm text-gray-500 italic">{plan.notes}</p>}
+                  {plan.notes && <p className="mt-2 text-sm italic">{plan.notes}</p>}
                 </div>
               ))}
             </div>
@@ -184,17 +168,15 @@ export default function AthletePage() {
         </div>
       )}
 
-      {/* Upload Tab */}
       {activeTab === 'upload' && (
         <div>
-          <h2 className="text-lg font-semibold mb-4">Upload Garmin CSV</h2>
+          <h2 className="text-xl font-semibold mb-4">Upload Garmin CSV</h2>
           
-          <div className="mb-6">
-            <label className="block mb-2 text-sm font-medium">Select CSV file from Garmin Connect export</label>
+          <div className="mb-4">
             <input
               type="file"
               accept=".csv"
-              onChange={handleFileSelect}
+              onChange={handleFileChange}
               className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
             />
           </div>
@@ -202,40 +184,34 @@ export default function AthletePage() {
           {preview.length > 0 && (
             <div>
               <h3 className="font-semibold mb-2">Preview ({preview.length} workouts)</h3>
-              <div className="overflow-x-auto mb-4 max-h-64 overflow-y-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-100 sticky top-0">
-                    <tr>
-                      <th className="px-3 py-2 text-left">Date</th>
-                      <th className="px-3 py-2 text-left">Type</th>
-                      <th className="px-3 py-2 text-right">Distance</th>
-                      <th className="px-3 py-2 text-right">Duration</th>
-                      <th className="px-3 py-2 text-right">Pace</th>
-                      <th className="px-3 py-2 text-right">Avg HR</th>
+              <div className="overflow-x-auto mb-4">
+                <table className="w-full border-collapse border text-sm">
+                  <thead>
+                    <tr className="bg-gray-100">
+                      <th className="border p-2">Date</th>
+                      <th className="border p-2">Type</th>
+                      <th className="border p-2">Distance</th>
+                      <th className="border p-2">Duration</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {preview.slice(0, 20).map((w, i) => (
-                      <tr key={i} className="border-b">
-                        <td className="px-3 py-2">{formatDate(w.date)}</td>
-                        <td className="px-3 py-2">{w.activity_type}</td>
-                        <td className="px-3 py-2 text-right">{w.distance_km?.toFixed(2) ?? '-'} km</td>
-                        <td className="px-3 py-2 text-right">{formatDuration(w.duration_seconds)}</td>
-                        <td className="px-3 py-2 text-right">{w.avg_pace_per_km ?? '-'}</td>
-                        <td className="px-3 py-2 text-right">{w.avg_heart_rate ?? '-'}</td>
+                    {preview.slice(0, 10).map((w, i) => (
+                      <tr key={i}>
+                        <td className="border p-2">{w.date}</td>
+                        <td className="border p-2">{w.activity_type}</td>
+                        <td className="border p-2">{w.distance_km?.toFixed(2)} km</td>
+                        <td className="border p-2">{formatDuration(w.duration_seconds || 0)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
-                {preview.length > 20 && (
-                  <p className="text-sm text-gray-500 mt-2">... and {preview.length - 20} more</p>
-                )}
+                {preview.length > 10 && <p className="text-sm text-gray-500 mt-2">...and {preview.length - 10} more</p>}
               </div>
-
+              
               <button
                 onClick={handleUpload}
                 disabled={uploading}
-                className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400"
+                className="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 disabled:bg-gray-400"
               >
                 {uploading ? 'Uploading...' : `Upload ${preview.length} Workouts`}
               </button>
